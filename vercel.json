@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "routes": [
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/web/index.html" }
+  ],
+  "buildCommand": null,
+  "outputDirectory": "web"
+}
