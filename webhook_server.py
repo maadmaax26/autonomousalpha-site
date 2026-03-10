@@ -13,7 +13,7 @@ app = Flask(__name__)
 
 # Configuration
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', '')
-PDF_PATH = '/home/efinney/.openclaw/workspace/business/autonomous-alpha/products/playbook.pdf'
+PDF_PATH = '/home/efinney/.openclaw/workspace/business/autonomous-alpha/playbook.pdf'
 LOG_FILE = '/home/efinney/.openclaw/workspace/business/autonomous-alpha/purchases.log'
 
 # Email config (set these as env vars)
@@ -141,9 +141,117 @@ The AutonomousAlpha Team
         print(f"[ERROR] Webhook processing failed: {e}")
         return jsonify({'error': str(e)}), 500
 
+# Trade alert logs
+def log_trade_alert(trade_data):
+    """Log trade execution"""
+    timestamp = datetime.now().isoformat()
+    log_file = '/home/efinney/.openclaw/workspace/business/autonomous-alpha/trades.log'
+    log_entry = f"{timestamp} | {trade_data.get('direction')} | {trade_data.get('contracts')} | {trade_data.get('credit')} | {trade_data.get('mode')}\n"
+    
+    with open(log_file, 'a') as f:
+        f.write(log_entry)
+    
+    print(f"[TRADE] {trade_data.get('direction')} {trade_data.get('contracts')} contracts")
+
+@app.route('/api/trade-alert', methods=['POST'])
+def trade_alert():
+    """Receive trade alerts from MES bot"""
+    try:
+        trade_data = request.get_json()
+        
+        if not trade_data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Log the trade
+        log_trade_alert(trade_data)
+        
+        # Send notification email if configured
+        if SMTP_USER and SMTP_PASS:
+            try:
+                subject = f"🎯 Trade Executed: {trade_data.get('direction')} {trade_data.get('symbol', '/MES')}"
+                body = f"""
+MES Bot Trade Alert
+===================
+
+Direction: {trade_data.get('direction')}
+Type: {trade_data.get('strategy_type')}
+Contracts: {trade_data.get('contracts')}
+Credit: ${trade_data.get('credit')}
+Mode: {trade_data.get('mode')}
+VIX: {trade_data.get('vix_at_entry', 'N/A')}
+RSI: {trade_data.get('rsi_at_entry', 'N/A')}
+
+Time: {datetime.now().strftime('%Y-%m-%d %H:%M EST')}
+
+--
+AutonomousAlpha Trading System
+"""
+                msg = MIMEMultipart()
+                msg['From'] = FROM_EMAIL
+                msg['To'] = 'earl.finney@gmail.com'  # Alert recipient
+                msg['Subject'] = subject
+                msg.attach(MIMEText(body, 'plain'))
+                
+                server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+                server.starttls()
+                server.login(SMTP_USER, SMTP_PASS)
+                server.send_message(msg)
+                server.quit()
+                
+                print("[ALERT] Email notification sent")
+            except Exception as e:
+                print(f"[ALERT ERROR] Email failed: {e}")
+        
+        return jsonify({
+            'status': 'received',
+            'trade_id': trade_data.get('execution_time', datetime.now().isoformat()),
+            'logged': True
+        }), 200
+        
+    except Exception as e:
+        print(f"[ERROR] Trade alert failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/bot-status', methods=['GET'])
+def bot_status():
+    """Get bot status from log files"""
+    try:
+        # Check recent trades
+        trades_file = '/home/efinney/.openclaw/workspace/business/autonomous-alpha/trades.log'
+        recent_trades = []
+        
+        if os.path.exists(trades_file):
+            with open(trades_file, 'r') as f:
+                lines = f.readlines()[-10:]  # Last 10 trades
+                for line in lines:
+                    parts = line.strip().split(' | ')
+                    if len(parts) >= 4:
+                        recent_trades.append({
+                            'timestamp': parts[0],
+                            'direction': parts[1],
+                            'contracts': parts[2],
+                            'credit': parts[3]
+                        })
+        
+        return jsonify({
+            'status': 'active',
+            'timestamp': datetime.now().isoformat(),
+            'recent_trades': recent_trades,
+            'webhook_url': 'https://courtney-unreposeful-slower.ngrok-free.dev'
+        }), 200
+        
+    except Exception as e:
+        print(f"[ERROR] Status check failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()})
+    return jsonify({
+        'status': 'ok', 
+        'timestamp': datetime.now().isoformat(),
+        'stripe_webhook': '/webhook/stripe',
+        'trade_alerts': '/api/trade-alert'
+    })
 
 if __name__ == '__main__':
     print("Starting AutonomousAlpha webhook server...")
